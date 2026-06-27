@@ -1,0 +1,6 @@
+{
+  "name": "Igreja Betel",
+  "description": "Aplicativo oficial para a Igreja Betel, contendo escalas para os ministérios de Dança, Louvor e Mídia, grupos de pastoreio, devocional diário e transmissões ao vivo de rádio, TV e lives.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
