@@ -4,6 +4,8 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { ChurchDatabase, Devocional } from "./src/types";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 
 // Initialize Express app
 const app = express();
@@ -13,6 +15,32 @@ app.use(express.json());
 
 // Path to JSON file database
 const DB_FILE = path.join(process.cwd(), "server_db.json");
+
+// Load Firebase Config
+const CONFIG_FILE = path.join(process.cwd(), "firebase-applet-config.json");
+let firestore: any = null;
+
+try {
+  if (fs.existsSync(CONFIG_FILE)) {
+    const configData = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+    const firebaseConfig = {
+      apiKey: configData.apiKey,
+      authDomain: configData.authDomain,
+      projectId: configData.projectId,
+      storageBucket: configData.storageBucket,
+      messagingSenderId: configData.messagingSenderId,
+      appId: configData.appId
+    };
+    const firebaseApp = initializeApp(firebaseConfig);
+    firestore = getFirestore(firebaseApp, configData.firestoreDatabaseId || undefined);
+    console.log("Firebase Firestore configurado com sucesso para persistência global!");
+  } else {
+    console.warn("firebase-applet-config.json não encontrado. Usando banco local offline.");
+  }
+} catch (error) {
+  console.error("Erro ao configurar Firebase Firestore, usando fallback local:", error);
+}
+
 
 // Initial mock devocionais to fallback or pre-populate
 const INITIAL_DEVOCIONAIS: Devocional[] = [
@@ -198,37 +226,131 @@ function getDefaultDb(): ChurchDatabase {
   };
 }
 
-// Function to read DB from file
-function readDb(): ChurchDatabase {
+// Function to read DB with Firestore persistence & local fallback
+async function readDb(): Promise<ChurchDatabase> {
   const defaultDb = getDefaultDb();
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      const data = fs.readFileSync(DB_FILE, "utf-8");
-      const parsed = JSON.parse(data);
-      return {
-        ...defaultDb,
-        ...parsed,
-        louvorScale: {
-          ...defaultDb.louvorScale,
-          ...(parsed.louvorScale || {})
-        },
-        photos: parsed.photos || defaultDb.photos || []
-      };
+  
+  if (!firestore) {
+    try {
+      if (fs.existsSync(DB_FILE)) {
+        const data = fs.readFileSync(DB_FILE, "utf-8");
+        const parsed = JSON.parse(data);
+        return {
+          ...defaultDb,
+          ...parsed,
+          louvorScale: {
+            ...defaultDb.louvorScale,
+            ...(parsed.louvorScale || {})
+          },
+          photos: parsed.photos || defaultDb.photos || []
+        };
+      }
+    } catch (error) {
+      console.error("Erro ao ler banco de dados JSON local", error);
     }
-  } catch (error) {
-    console.error("Erro ao ler banco de dados JSON, usando defaults", error);
+    await writeDb(defaultDb);
+    return defaultDb;
   }
-  // Write default db if not exists
-  writeDb(defaultDb);
-  return defaultDb;
+
+  try {
+    const keys: (keyof ChurchDatabase)[] = [
+      "members",
+      "pastoralGroups",
+      "visitors",
+      "lessons",
+      "cultoSchedules",
+      "dancaScale",
+      "louvorScale",
+      "midiaScale",
+      "liveSettings",
+      "devocionais",
+      "photos"
+    ];
+
+    const promises = keys.map(key => {
+      const docRef = doc(firestore, "church_data", key);
+      return getDoc(docRef);
+    });
+
+    const snapshots = await Promise.all(promises);
+    const db: any = {};
+
+    snapshots.forEach((snap, idx) => {
+      const key = keys[idx];
+      if (snap.exists()) {
+        const val = snap.data();
+        if (Array.isArray(defaultDb[key])) {
+          db[key] = val.data || [];
+        } else {
+          db[key] = val || defaultDb[key];
+        }
+      } else {
+        db[key] = defaultDb[key];
+      }
+    });
+
+    // Handle missing top level arrays cleanly
+    const finalDb: ChurchDatabase = {
+      ...defaultDb,
+      ...db,
+      louvorScale: {
+        ...defaultDb.louvorScale,
+        ...(db.louvorScale || {})
+      },
+      photos: db.photos || defaultDb.photos || []
+    };
+
+    return finalDb;
+  } catch (error) {
+    console.error("Erro ao ler do Firestore, usando fallback local:", error);
+    try {
+      if (fs.existsSync(DB_FILE)) {
+        const data = fs.readFileSync(DB_FILE, "utf-8");
+        return JSON.parse(data);
+      }
+    } catch (e) {}
+    return defaultDb;
+  }
 }
 
-// Function to write DB to file
-function writeDb(db: ChurchDatabase) {
+// Function to write DB to Firestore & local fallback
+async function writeDb(db: ChurchDatabase) {
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), "utf-8");
   } catch (error) {
-    console.error("Erro ao salvar banco de dados JSON", error);
+    console.error("Erro ao salvar backup de banco de dados JSON local", error);
+  }
+
+  if (!firestore) return;
+
+  try {
+    const keys: (keyof ChurchDatabase)[] = [
+      "members",
+      "pastoralGroups",
+      "visitors",
+      "lessons",
+      "cultoSchedules",
+      "dancaScale",
+      "louvorScale",
+      "midiaScale",
+      "liveSettings",
+      "devocionais",
+      "photos"
+    ];
+
+    const promises = keys.map(key => {
+      const docRef = doc(firestore, "church_data", key);
+      const data = db[key];
+      if (Array.isArray(data)) {
+        return setDoc(docRef, { data });
+      } else {
+        return setDoc(docRef, data);
+      }
+    });
+
+    await Promise.all(promises);
+  } catch (error) {
+    console.error("Erro ao escrever no Firestore:", error);
   }
 }
 
@@ -246,14 +368,14 @@ if (process.env.GEMINI_API_KEY) {
 }
 
 // API Routes
-app.get("/api/db", (req, res) => {
-  const db = readDb();
+app.get("/api/db", async (req, res) => {
+  const db = await readDb();
   res.json(db);
 });
 
 // Create or update member
-app.post("/api/db/member", (req, res) => {
-  const db = readDb();
+app.post("/api/db/member", async (req, res) => {
+  const db = await readDb();
   const memberData = req.body;
   
   if (!memberData.name) {
@@ -268,7 +390,7 @@ app.post("/api/db/member", (req, res) => {
       ...memberData,
       id: db.members[existingIdx].id // Keep ID
     };
-    writeDb(db);
+    await writeDb(db);
     return res.json(db.members[existingIdx]);
   } else {
     // Create new
@@ -277,22 +399,22 @@ app.post("/api/db/member", (req, res) => {
       id: memberData.id || "member-" + Date.now()
     };
     db.members.push(newMember);
-    writeDb(db);
+    await writeDb(db);
     return res.json(newMember);
   }
 });
 
-app.delete("/api/db/member/:id", (req, res) => {
-  const db = readDb();
+app.delete("/api/db/member/:id", async (req, res) => {
+  const db = await readDb();
   const id = req.params.id;
   db.members = db.members.filter(m => m.id !== id);
-  writeDb(db);
+  await writeDb(db);
   res.json({ success: true });
 });
 
 // Create or update pastoral group
-app.post("/api/db/pastoral-group", (req, res) => {
-  const db = readDb();
+app.post("/api/db/pastoral-group", async (req, res) => {
+  const db = await readDb();
   const groupData = req.body;
 
   if (!groupData.name) {
@@ -305,7 +427,7 @@ app.post("/api/db/pastoral-group", (req, res) => {
       ...db.pastoralGroups[existingIdx],
       ...groupData
     };
-    writeDb(db);
+    await writeDb(db);
     return res.json(db.pastoralGroups[existingIdx]);
   } else {
     const newGroup = {
@@ -313,24 +435,24 @@ app.post("/api/db/pastoral-group", (req, res) => {
       id: "group-" + Date.now()
     };
     db.pastoralGroups.push(newGroup);
-    writeDb(db);
+    await writeDb(db);
     return res.json(newGroup);
   }
 });
 
-app.delete("/api/db/pastoral-group/:id", (req, res) => {
-  const db = readDb();
+app.delete("/api/db/pastoral-group/:id", async (req, res) => {
+  const db = await readDb();
   const id = req.params.id;
   db.pastoralGroups = db.pastoralGroups.filter(g => g.id !== id);
   // Also clean visitors
   db.visitors = db.visitors.filter(v => v.groupId !== id);
-  writeDb(db);
+  await writeDb(db);
   res.json({ success: true });
 });
 
 // Add visitor to pastoral group
-app.post("/api/db/visitor", (req, res) => {
-  const db = readDb();
+app.post("/api/db/visitor", async (req, res) => {
+  const db = await readDb();
   const visitorData = req.body;
 
   if (!visitorData.name || !visitorData.groupId) {
@@ -343,13 +465,13 @@ app.post("/api/db/visitor", (req, res) => {
     visitDate: visitorData.visitDate || new Date().toISOString().split('T')[0]
   };
   db.visitors.push(newVisitor);
-  writeDb(db);
+  await writeDb(db);
   res.json(newVisitor);
 });
 
 // Create or edit group lesson
-app.post("/api/db/lesson", (req, res) => {
-  const db = readDb();
+app.post("/api/db/lesson", async (req, res) => {
+  const db = await readDb();
   const lessonData = req.body;
 
   if (!lessonData.title) {
@@ -362,7 +484,7 @@ app.post("/api/db/lesson", (req, res) => {
       ...db.lessons[existingIdx],
       ...lessonData
     };
-    writeDb(db);
+    await writeDb(db);
     return res.json(db.lessons[existingIdx]);
   } else {
     const newLesson = {
@@ -371,28 +493,28 @@ app.post("/api/db/lesson", (req, res) => {
       date: lessonData.date || new Date().toISOString().split('T')[0]
     };
     db.lessons.push(newLesson);
-    writeDb(db);
+    await writeDb(db);
     return res.json(newLesson);
   }
 });
 
 // Update Minister Schedule for a culto
-app.post("/api/db/culto-schedule", (req, res) => {
-  const db = readDb();
+app.post("/api/db/culto-schedule", async (req, res) => {
+  const db = await readDb();
   const { id, ministerName } = req.body;
 
   const cultoIdx = db.cultoSchedules.findIndex(c => c.id === id);
   if (cultoIdx >= 0) {
     db.cultoSchedules[cultoIdx].ministerName = ministerName;
-    writeDb(db);
+    await writeDb(db);
     return res.json(db.cultoSchedules[cultoIdx]);
   }
   res.status(404).json({ error: "Culto não encontrado" });
 });
 
 // Update Dança Scale
-app.post("/api/db/scale/danca", (req, res) => {
-  const db = readDb();
+app.post("/api/db/scale/danca", async (req, res) => {
+  const db = await readDb();
   const scaleData = req.body;
   
   db.dancaScale = {
@@ -401,13 +523,13 @@ app.post("/api/db/scale/danca", (req, res) => {
     dancers: Array.isArray(scaleData.dancers) ? scaleData.dancers : db.dancaScale.dancers
   };
   
-  writeDb(db);
+  await writeDb(db);
   res.json(db.dancaScale);
 });
 
 // Update Louvor Scale
-app.post("/api/db/scale/louvor", (req, res) => {
-  const db = readDb();
+app.post("/api/db/scale/louvor", async (req, res) => {
+  const db = await readDb();
   const scaleData = req.body;
 
   db.louvorScale = {
@@ -427,13 +549,13 @@ app.post("/api/db/scale/louvor", (req, res) => {
     songLinks: Array.isArray(scaleData.songLinks) ? scaleData.songLinks : db.louvorScale.songLinks
   };
 
-  writeDb(db);
+  await writeDb(db);
   res.json(db.louvorScale);
 });
 
 // Update Mídia Scale
-app.post("/api/db/scale/midia", (req, res) => {
-  const db = readDb();
+app.post("/api/db/scale/midia", async (req, res) => {
+  const db = await readDb();
   const scaleData = req.body;
 
   db.midiaScale = {
@@ -448,13 +570,13 @@ app.post("/api/db/scale/midia", (req, res) => {
     futuro3: scaleData.futuro3 !== undefined ? scaleData.futuro3 : db.midiaScale.futuro3
   };
 
-  writeDb(db);
+  await writeDb(db);
   res.json(db.midiaScale);
 });
 
 // Update Live Settings
-app.post("/api/db/live", (req, res) => {
-  const db = readDb();
+app.post("/api/db/live", async (req, res) => {
+  const db = await readDb();
   const liveData = req.body;
 
   db.liveSettings = {
@@ -462,7 +584,7 @@ app.post("/api/db/live", (req, res) => {
     ...liveData
   };
 
-  writeDb(db);
+  await writeDb(db);
   res.json(db.liveSettings);
 });
 
@@ -481,7 +603,7 @@ app.post("/api/db/devocional/generate", async (req, res) => {
         "Romanos 15:13 - 'Que o Deus da esperança os encha de toda alegria e paz, por sua confiança nele, para que vocês transbordem de esperança pelo poder do Espírito Santo.'"
       ];
       const randomContents = [
-        "A jornada da vida cristã exige que estejamos constantemente sintonizados com a voz de Deus. Seja forte, pois as promessas d'Ele não falham.",
+        "A jornada da via cristã exige que estejamos constantemente sintonizados com a voz de Deus. Seja forte, pois as promessas d'Ele não falham.",
         "A paz de Cristo excede todo entendimento. Quando tudo parecer confuso, feche seus olhos e lembre-se de que Ele é o Bom Pastor que guia suas ovelhas com amor.",
         "Ter esperança não significa ignorar as dificuldades, mas sim saber que Deus está acima delas. Confie que o Senhor está trabalhando no seu amanhã."
       ];
@@ -495,9 +617,9 @@ app.post("/api/db/devocional/generate", async (req, res) => {
         date: new Date().toISOString().split('T')[0]
       };
 
-      const db = readDb();
+      const db = await readDb();
       db.devocionais.unshift(offlineDevocional);
-      writeDb(db);
+      await writeDb(db);
 
       return res.json({
         success: true,
@@ -538,9 +660,9 @@ app.post("/api/db/devocional/generate", async (req, res) => {
       date: new Date().toISOString().split('T')[0]
     };
 
-    const db = readDb();
+    const db = await readDb();
     db.devocionais.unshift(newDevocional);
-    writeDb(db);
+    await writeDb(db);
 
     res.json({ success: true, devocional: newDevocional });
 
@@ -612,8 +734,8 @@ Como incentivo, aqui está uma curiosidade bíblica extraordinária:
 });
 
 // Add manual devocional
-app.post("/api/db/devocional/add", (req, res) => {
-  const db = readDb();
+app.post("/api/db/devocional/add", async (req, res) => {
+  const db = await readDb();
   const devocionalData = req.body;
 
   if (!devocionalData.title || !devocionalData.verse || !devocionalData.content) {
@@ -629,13 +751,13 @@ app.post("/api/db/devocional/add", (req, res) => {
   };
 
   db.devocionais.unshift(newDevocional);
-  writeDb(db);
+  await writeDb(db);
   res.json(newDevocional);
 });
 
 // Add new church/culto photo
-app.post("/api/db/photo", (req, res) => {
-  const db = readDb();
+app.post("/api/db/photo", async (req, res) => {
+  const db = await readDb();
   const { url, description } = req.body;
 
   if (!url) {
@@ -651,25 +773,25 @@ app.post("/api/db/photo", (req, res) => {
 
   if (!db.photos) db.photos = [];
   db.photos.unshift(newPhoto);
-  writeDb(db);
+  await writeDb(db);
   res.json(newPhoto);
 });
 
 // Delete church/culto photo
-app.delete("/api/db/photo/:id", (req, res) => {
-  const db = readDb();
+app.delete("/api/db/photo/:id", async (req, res) => {
+  const db = await readDb();
   const id = req.params.id;
 
   if (!db.photos) db.photos = [];
   db.photos = db.photos.filter(p => p.id !== id);
-  writeDb(db);
+  await writeDb(db);
   res.json({ success: true });
 });
 
 // Start server
 async function startServer() {
   // Read DB to ensure initialization
-  readDb();
+  await readDb();
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
