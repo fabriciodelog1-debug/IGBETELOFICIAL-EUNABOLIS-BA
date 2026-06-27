@@ -4,8 +4,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { ChurchDatabase, Devocional } from "./src/types";
-import { initializeApp } from "firebase/app";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import { Firestore } from "@google-cloud/firestore";
 
 // Initialize Express app
 const app = express();
@@ -18,22 +17,16 @@ const DB_FILE = path.join(process.cwd(), "server_db.json");
 
 // Load Firebase Config
 const CONFIG_FILE = path.join(process.cwd(), "firebase-applet-config.json");
-let firestore: any = null;
+let firestore: Firestore | null = null;
 
 try {
   if (fs.existsSync(CONFIG_FILE)) {
     const configData = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
-    const firebaseConfig = {
-      apiKey: configData.apiKey,
-      authDomain: configData.authDomain,
+    firestore = new Firestore({
       projectId: configData.projectId,
-      storageBucket: configData.storageBucket,
-      messagingSenderId: configData.messagingSenderId,
-      appId: configData.appId
-    };
-    const firebaseApp = initializeApp(firebaseConfig);
-    firestore = getFirestore(firebaseApp, configData.firestoreDatabaseId || undefined);
-    console.log("Firebase Firestore configurado com sucesso para persistência global!");
+      databaseId: configData.firestoreDatabaseId || undefined
+    });
+    console.log("Google Cloud Firestore configurado com sucesso para persistência global!");
   } else {
     console.warn("firebase-applet-config.json não encontrado. Usando banco local offline.");
   }
@@ -164,35 +157,35 @@ function getDefaultDb(): ChurchDatabase {
     ],
     dancaScale: {
       id: "current",
-      ministroResponsavel: "Ana Paula",
-      dancers: ["Isabela", "Beatriz", "Mariana", "Gabriele", "Juliana", "Patricia", "Camila", "Carla", "Ester"]
+      ministroResponsavel: "",
+      dancers: []
     },
     louvorScale: {
       id: "current",
-      teclado: "Samuel Keys",
-      violao: "Daniel Strings",
-      bateria: "Filipe Drum",
-      guitarra: "Thiago Rock",
+      teclado: "",
+      violao: "",
+      bateria: "",
+      guitarra: "",
       instrumentoAdicional1: "",
       instrumentoAdicional2: "",
       instrumentoAdicional3: "",
-      vozPrincipal: "Marcos Silva",
-      primeiraVoz: "Jéssica Souza",
-      segundaVoz: "Letícia Neves",
+      vozPrincipal: "",
+      primeiraVoz: "",
+      segundaVoz: "",
       terceiraVoz: "",
       quartaVoz: "",
       songLinks: ["", "", "", "", ""]
     },
     midiaScale: {
       id: "current",
-      camarim: "Renata Santos",
-      movel: "Mateus Castro",
-      mesaDeCorte: "André Lima",
-      cadaShow: "Igor Neves",
-      iluminacao: "Darlan Luz",
-      futuro1: "Equipamento Projetor",
-      futuro2: "Transmissão Externa",
-      futuro3: "Câmera 4"
+      camarim: "",
+      movel: "",
+      mesaDeCorte: "",
+      cadaShow: "",
+      iluminacao: "",
+      futuro1: "",
+      futuro2: "",
+      futuro3: ""
     },
     liveSettings: {
       isLive: true,
@@ -224,6 +217,65 @@ function getDefaultDb(): ChurchDatabase {
       }
     ]
   };
+}
+
+function cleanMockScales(db: ChurchDatabase): { db: ChurchDatabase; modified: boolean } {
+  let modified = false;
+
+  // Dança Scale cleanup
+  if (db.dancaScale) {
+    if (db.dancaScale.ministroResponsavel === "Ana Paula") {
+      db.dancaScale.ministroResponsavel = "";
+      modified = true;
+    }
+    if (JSON.stringify(db.dancaScale.dancers) === JSON.stringify(["Isabela", "Beatriz", "Mariana", "Gabriele", "Juliana", "Patricia", "Camila", "Carla", "Ester"])) {
+      db.dancaScale.dancers = [];
+      modified = true;
+    }
+  }
+
+  // Louvor Scale cleanup
+  if (db.louvorScale) {
+    const mockLouvor = {
+      teclado: "Samuel Keys",
+      violao: "Daniel Strings",
+      bateria: "Filipe Drum",
+      guitarra: "Thiago Rock",
+      vozPrincipal: "Marcos Silva",
+      primeiraVoz: "Jéssica Souza",
+      segundaVoz: "Letícia Neves"
+    };
+
+    (Object.keys(mockLouvor) as Array<keyof typeof mockLouvor>).forEach(key => {
+      if (db.louvorScale[key] === mockLouvor[key]) {
+        db.louvorScale[key] = "";
+        modified = true;
+      }
+    });
+  }
+
+  // Mídia Scale cleanup
+  if (db.midiaScale) {
+    const mockMidia = {
+      camarim: "Renata Santos",
+      movel: "Mateus Castro",
+      mesaDeCorte: "André Lima",
+      cadaShow: "Igor Neves",
+      iluminacao: "Darlan Luz",
+      futuro1: "Equipamento Projetor",
+      futuro2: "Transmissão Externa",
+      futuro3: "Câmera 4"
+    };
+
+    (Object.keys(mockMidia) as Array<keyof typeof mockMidia>).forEach(key => {
+      if (db.midiaScale[key] === mockMidia[key]) {
+        db.midiaScale[key] = "";
+        modified = true;
+      }
+    });
+  }
+
+  return { db, modified };
 }
 
 // Function to read DB with Firestore persistence & local fallback
@@ -268,8 +320,8 @@ async function readDb(): Promise<ChurchDatabase> {
     ];
 
     const promises = keys.map(key => {
-      const docRef = doc(firestore, "church_data", key);
-      return getDoc(docRef);
+      const docRef = firestore!.collection("church_data").doc(key);
+      return docRef.get();
     });
 
     const snapshots = await Promise.all(promises);
@@ -277,10 +329,10 @@ async function readDb(): Promise<ChurchDatabase> {
 
     snapshots.forEach((snap, idx) => {
       const key = keys[idx];
-      if (snap.exists()) {
+      if (snap.exists) {
         const val = snap.data();
         if (Array.isArray(defaultDb[key])) {
-          db[key] = val.data || [];
+          db[key] = (val && val.data) || [];
         } else {
           db[key] = val || defaultDb[key];
         }
@@ -290,7 +342,7 @@ async function readDb(): Promise<ChurchDatabase> {
     });
 
     // Handle missing top level arrays cleanly
-    const finalDb: ChurchDatabase = {
+    let finalDb: ChurchDatabase = {
       ...defaultDb,
       ...db,
       louvorScale: {
@@ -299,6 +351,14 @@ async function readDb(): Promise<ChurchDatabase> {
       },
       photos: db.photos || defaultDb.photos || []
     };
+
+    // Clean mock scales if needed, and write back to Firestore to propagate
+    const cleaned = cleanMockScales(finalDb);
+    if (cleaned.modified) {
+      finalDb = cleaned.db;
+      // Propagate the change asynchronously so we don't block the read
+      writeDb(finalDb).catch(err => console.error("Erro ao gravar dados limpos no Firestore:", err));
+    }
 
     return finalDb;
   } catch (error) {
@@ -339,12 +399,12 @@ async function writeDb(db: ChurchDatabase) {
     ];
 
     const promises = keys.map(key => {
-      const docRef = doc(firestore, "church_data", key);
+      const docRef = firestore!.collection("church_data").doc(key);
       const data = db[key];
       if (Array.isArray(data)) {
-        return setDoc(docRef, { data });
+        return docRef.set({ data });
       } else {
-        return setDoc(docRef, data);
+        return docRef.set(data);
       }
     });
 

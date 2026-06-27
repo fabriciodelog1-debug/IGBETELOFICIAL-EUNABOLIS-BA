@@ -104,35 +104,35 @@ const INITIAL_OFFLINE_DB: ChurchDatabase = {
   ],
   dancaScale: {
     id: "current",
-    ministroResponsavel: "Ana Paula",
-    dancers: ["Isabela", "Beatriz", "Mariana", "Gabriele", "Juliana", "Patricia", "Camila", "Carla", "Ester"]
+    ministroResponsavel: "",
+    dancers: []
   },
   louvorScale: {
     id: "current",
-    teclado: "Samuel Keys",
-    violao: "Daniel Strings",
-    bateria: "Filipe Drum",
-    guitarra: "Thiago Rock",
+    teclado: "",
+    violao: "",
+    bateria: "",
+    guitarra: "",
     instrumentoAdicional1: "",
     instrumentoAdicional2: "",
     instrumentoAdicional3: "",
-    vozPrincipal: "Marcos Silva",
-    primeiraVoz: "Jéssica Souza",
-    segundaVoz: "Letícia Neves",
+    vozPrincipal: "",
+    primeiraVoz: "",
+    segundaVoz: "",
     terceiraVoz: "",
     quartaVoz: "",
     songLinks: ["", "", "", "", ""]
   },
   midiaScale: {
     id: "current",
-    camarim: "Renata Santos",
-    movel: "Mateus Castro",
-    mesaDeCorte: "André Lima",
-    cadaShow: "Igor Neves",
-    iluminacao: "Darlan Luz",
-    futuro1: "Equipamento Projetor",
-    futuro2: "Transmissão Externa",
-    futuro3: "Câmera 4"
+    camarim: "",
+    movel: "",
+    mesaDeCorte: "",
+    cadaShow: "",
+    iluminacao: "",
+    futuro1: "",
+    futuro2: "",
+    futuro3: ""
   },
   liveSettings: {
     isLive: true,
