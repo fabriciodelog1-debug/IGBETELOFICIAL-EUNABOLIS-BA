@@ -11,6 +11,8 @@ interface InicioTabProps {
   onDeleteMember: (id: string) => Promise<void>;
   setMoreSubtab: (subtab: string) => void;
   onRefreshDb?: () => Promise<void>;
+  onAddPhoto?: (url: string, description: string) => Promise<boolean>;
+  onDeletePhoto?: (id: string) => Promise<boolean>;
 }
 
 export default function InicioTab({
@@ -21,7 +23,9 @@ export default function InicioTab({
   onUpdateMember,
   onDeleteMember,
   setMoreSubtab,
-  onRefreshDb
+  onRefreshDb,
+  onAddPhoto,
+  onDeletePhoto
 }: InicioTabProps) {
   const [showGoogleModal, setShowGoogleModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -55,16 +59,22 @@ export default function InicioTab({
 
     setIsUploading(true);
     try {
-      const response = await fetch("/api/db/photo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: newPhotoUrl,
-          description: newPhotoDesc.trim()
-        })
-      });
+      let success = false;
+      if (onAddPhoto) {
+        success = await onAddPhoto(newPhotoUrl, newPhotoDesc.trim());
+      } else {
+        const response = await fetch("/api/db/photo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: newPhotoUrl,
+            description: newPhotoDesc.trim()
+          })
+        });
+        success = response.ok;
+      }
 
-      if (response.ok) {
+      if (success) {
         setShowPhotoModal(false);
         setNewPhotoUrl("");
         setNewPhotoDesc("");
@@ -84,10 +94,17 @@ export default function InicioTab({
   const handleDeletePhoto = async (photoId: string) => {
     if (!window.confirm("Deseja realmente excluir esta foto da galeria?")) return;
     try {
-      const response = await fetch(`/api/db/photo/${photoId}`, {
-        method: "DELETE"
-      });
-      if (response.ok) {
+      let success = false;
+      if (onDeletePhoto) {
+        success = await onDeletePhoto(photoId);
+      } else {
+        const response = await fetch(`/api/db/photo/${photoId}`, {
+          method: "DELETE"
+        });
+        success = response.ok;
+      }
+
+      if (success) {
         if (onRefreshDb) {
           await onRefreshDb();
         }
