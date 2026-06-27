@@ -149,7 +149,7 @@ export default function CultosTab({ db, onUpdateCultoSchedule }: CultosTabProps)
 
           <a 
             id="cultos-maps-link"
-            href="https://maps.google.com/?q=Igreja+Betel+Eunapolis"
+            href="https://maps.google.com/?q=-16.370636,-39.567028"
             target="_blank"
             rel="noopener noreferrer"
             className="w-full bg-neutral-900 text-white hover:bg-neutral-800 py-3 rounded-2xl text-xs font-bold flex items-center justify-center space-x-2 transition-all shadow-sm active:scale-98"
